@@ -267,7 +267,7 @@
     }
 
     /* ---------- Map ---------- */
-   
+
 
 
     .zoom-controls {
@@ -370,7 +370,7 @@
       }
     }
   </style>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css" />
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
@@ -451,166 +451,171 @@
   </div>
 
   <script>
-   const map = L.map('map').setView([20.5937, 78.9629], 5);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap contributors'
-}).addTo(map);
+    const map = L.map('map').setView([20.5937, 78.9629], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
 
-// Live GPS tracking
-if (navigator.geolocation) {
-  let userMarker, accuracyCircle;
-  navigator.geolocation.watchPosition(pos => {
-    const latlng = [pos.coords.latitude, pos.coords.longitude];
-    if (userMarker) {
-      userMarker.setLatLng(latlng);
-      accuracyCircle.setLatLng(latlng).setRadius(pos.coords.accuracy);
-    } else {
-      userMarker = L.marker(latlng).addTo(map).bindPopup("You are here");
-      accuracyCircle = L.circle(latlng, { radius: pos.coords.accuracy }).addTo(map);
-      userMarker.openPopup();
-      map.setView(latlng, 16);
+    // Live GPS tracking
+    if (navigator.geolocation) {
+      let userMarker, accuracyCircle;
+      navigator.geolocation.watchPosition(pos => {
+        const latlng = [pos.coords.latitude, pos.coords.longitude];
+
+        // First time: add current location as starting point
+        if (!userMarker) {
+          userMarker = L.marker(latlng).addTo(map).bindPopup("Starting Point");
+          accuracyCircle = L.circle(latlng, { radius: pos.coords.accuracy }).addTo(map);
+          userMarker.openPopup();
+          map.setView(latlng, 16);
+
+          // Add current location to journey points automatically
+          currentPoints.push({ lat: latlng[0], lng: latlng[1], marker: userMarker });
+          updateStats();
+        } else {
+          userMarker.setLatLng(latlng);
+          accuracyCircle.setLatLng(latlng).setRadius(pos.coords.accuracy);
+        }
+      }, err => console.warn("Geolocation error:", err.message), { enableHighAccuracy: true });
     }
-  }, err => console.warn("Geolocation error:", err.message), { enableHighAccuracy: true });
-}
+    // --- STATE ---
+    let adding = false;
+    let currentPoints = [];
+    let routeLine = null;
+    let journeys = [];
 
-// --- STATE ---
-let adding = false;
-let currentPoints = [];
-let routeLine = null;
-let journeys = [];
+    // Speeds & METs
+    const SPEEDS = { walking: 5, bicycle: 15, bike: 40, car: 60 };
+    const METS = { walking: 3.8, bicycle: 6.8, bike: 2.5, car: 1.5 };
+    const USER_WEIGHT_KG = 70;
 
-// Speeds & METs
-const SPEEDS = { walking: 5, bicycle: 15, bike: 40, car: 60 };
-const METS = { walking: 3.8, bicycle: 6.8, bike: 2.5, car: 1.5 };
-const USER_WEIGHT_KG = 70;
+    // UI refs
+    const modeSel = document.getElementById('mode');
+    const distVal = document.getElementById('distVal');
+    const durVal = document.getElementById('durVal');
+    const calVal = document.getElementById('calVal');
+    const modeVal = document.getElementById('modeVal');
+    const tripName = document.getElementById('tripName');
 
-// UI refs
-const modeSel = document.getElementById('mode');
-const distVal = document.getElementById('distVal');
-const durVal = document.getElementById('durVal');
-const calVal = document.getElementById('calVal');
-const modeVal = document.getElementById('modeVal');
-const tripName = document.getElementById('tripName');
+    // --- UTILS ---
+    function haversine(a, b) {
+      const R = 6371; // km
+      const dLat = (b.lat - a.lat) * Math.PI / 180;
+      const dLon = (b.lng - a.lng) * Math.PI / 180; // use lng
+      const lat1 = a.lat * Math.PI / 180;
+      const lat2 = b.lat * Math.PI / 180;
+      const c = Math.sin(dLat / 2) ** 2 + Math.sin(dLon / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
+      return R * 2 * Math.atan2(Math.sqrt(c), Math.sqrt(1 - c));
+    }
 
-// --- UTILS ---
-function haversine(a, b) {
-  const R = 6371; // km
-  const dLat = (b.lat - a.lat) * Math.PI/180;
-  const dLon = (b.lng - a.lng) * Math.PI/180; // use lng
-  const lat1 = a.lat * Math.PI/180;
-  const lat2 = b.lat * Math.PI/180;
-  const c = Math.sin(dLat/2)**2 + Math.sin(dLon/2)**2 * Math.cos(lat1)*Math.cos(lat2);
-  return R * 2 * Math.atan2(Math.sqrt(c), Math.sqrt(1-c));
-}
+    function sumDistance(points) {
+      let total = 0;
+      for (let i = 1; i < points.length; i++) total += haversine(points[i - 1], points[i]);
+      return total;
+    }
+    function estimateDurationHours(distanceKm, mode) {
+      return distanceKm / (SPEEDS[mode] || 5);
+    }
+    function estimateCalories(distanceKm, mode) {
+      const hours = estimateDurationHours(distanceKm, mode);
+      return Math.round((METS[mode] || 3.5) * USER_WEIGHT_KG * hours);
+    }
+    function hhmmFromHours(h) {
+      const totalMin = Math.round(h * 60);
+      const mm = totalMin % 60;
+      const hh = Math.floor(totalMin / 60);
+      return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    }
+    function updateStats() {
+      const mode = modeSel.value;
+      modeVal.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
+      const km = sumDistance(currentPoints.map(p => ({ lat: p.lat, lng: p.lng })));
+      distVal.textContent = `${km.toFixed(2)} km`;
+      const hrs = estimateDurationHours(km, mode);
+      durVal.textContent = hhmmFromHours(hrs);
+      calVal.textContent = `${estimateCalories(km, mode).toLocaleString()} kcal`;
+    }
 
-function sumDistance(points) {
-  let total = 0;
-  for (let i = 1; i < points.length; i++) total += haversine(points[i-1], points[i]);
-  return total;
-}
-function estimateDurationHours(distanceKm, mode) {
-  return distanceKm / (SPEEDS[mode] || 5);
-}
-function estimateCalories(distanceKm, mode) {
-  const hours = estimateDurationHours(distanceKm, mode);
-  return Math.round((METS[mode] || 3.5) * USER_WEIGHT_KG * hours);
-}
-function hhmmFromHours(h) {
-  const totalMin = Math.round(h*60);
-  const mm = totalMin % 60;
-  const hh = Math.floor(totalMin/60);
-  return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
-}
-function updateStats() {
-  const mode = modeSel.value;
-  modeVal.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
-  const km = sumDistance(currentPoints.map(p=>({lat:p.lat,lng:p.lng})));
-  distVal.textContent = `${km.toFixed(2)} km`;
-  const hrs = estimateDurationHours(km, mode);
-  durVal.textContent = hhmmFromHours(hrs);
-  calVal.textContent = `${estimateCalories(km, mode).toLocaleString()} kcal`;
-}
+    // --- ROUTE ---
+    async function drawRoute(coords) {
+      if (routeLine) map.removeLayer(routeLine);
+      if (coords.length < 2) return null;
 
-// --- ROUTE ---
-async function drawRoute(coords) {
-  if (routeLine) map.removeLayer(routeLine);
-  if (coords.length < 2) return null;
+      const url = `https://router.project-osrm.org/route/v1/driving/${coords.map(c => c[1] + ',' + c[0]).join(';')}?overview=full&geometries=geojson`;
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!data.routes || !data.routes[0]) return null;
+        routeLine = L.geoJSON(data.routes[0].geometry, { color: '#ff4757', weight: 4 }).addTo(map);
+        map.fitBounds(routeLine.getBounds());
+        return routeLine;
+      } catch (err) { console.error("OSRM error:", err); return null; }
+    }
 
-  const url = `https://router.project-osrm.org/route/v1/driving/${coords.map(c=>c[1]+','+c[0]).join(';')}?overview=full&geometries=geojson`;
-  try {
-    const res = await fetch(url);
-    const data = await res.json();
-    if (!data.routes || !data.routes[0]) return null;
-    routeLine = L.geoJSON(data.routes[0].geometry, { color:'#ff4757', weight:4 }).addTo(map);
-    map.fitBounds(routeLine.getBounds());
-    return routeLine;
-  } catch(err){ console.error("OSRM error:", err); return null; }
-}
+    // --- MAP CLICK ---
+    map.on('click', async e => {
+      if (!adding) return;
+      const { lat, lng } = e.latlng;
+      const marker = L.marker([lat, lng]).addTo(map);
+      currentPoints.push({ lat, lng, marker });
+      if (currentPoints.length >= 2) await drawRoute(currentPoints.map(p => [p.lat, p.lng]));
+      updateStats();
+    });
 
-// --- MAP CLICK ---
-map.on('click', async e => {
-  if (!adding) return;
-  const { lat, lng } = e.latlng;
-  const marker = L.marker([lat, lng]).addTo(map);
-  currentPoints.push({ lat, lng, marker });
-  if (currentPoints.length >= 2) await drawRoute(currentPoints.map(p=>[p.lat,p.lng]));
-  updateStats();
-});
+    // --- BUTTONS ---
+    document.getElementById("startBtn").addEventListener("click", () => {
+      adding = !adding;
+      document.getElementById("startBtn").textContent = adding ? "Stop Adding" : "Start Journey";
+    });
 
-// --- BUTTONS ---
-document.getElementById("startBtn").addEventListener("click", () => {
-  adding = !adding;
-  document.getElementById("startBtn").textContent = adding ? "Stop Adding" : "Start Journey";
-});
+    document.getElementById("undoBtn").addEventListener("click", () => {
+      if (!currentPoints.length) return;
+      const last = currentPoints.pop();
+      map.removeLayer(last.marker);
+      if (routeLine) {
+        map.removeLayer(routeLine);
+        routeLine = null;
+        if (currentPoints.length >= 2) drawRoute(currentPoints.map(p => [p.lat, p.lng]));
+      }
+      updateStats();
+    });
 
-document.getElementById("undoBtn").addEventListener("click", () => {
-  if (!currentPoints.length) return;
-  const last = currentPoints.pop();
-  map.removeLayer(last.marker);
-  if (routeLine) {
-    map.removeLayer(routeLine);
-    routeLine = null;
-    if (currentPoints.length >= 2) drawRoute(currentPoints.map(p=>[p.lat,p.lng]));
-  }
-  updateStats();
-});
+    document.getElementById("clearBtn").addEventListener("click", () => {
+      currentPoints.forEach(p => map.removeLayer(p.marker));
+      if (routeLine) map.removeLayer(routeLine);
+      currentPoints = [];
+      routeLine = null;
+      updateStats();
+    });
 
-document.getElementById("clearBtn").addEventListener("click", () => {
-  currentPoints.forEach(p=>map.removeLayer(p.marker));
-  if (routeLine) map.removeLayer(routeLine);
-  currentPoints=[];
-  routeLine=null;
-  updateStats();
-});
+    document.getElementById("saveBtn").addEventListener("click", () => {
+      if (currentPoints.length < 2) { alert("Add at least 2 points!"); return; }
+      const name = tripName.value || "Unnamed Trip";
+      journeys.push({
+        id: Date.now(),
+        name,
+        points: currentPoints.map(p => ({ lat: p.lat, lng: p.lng })),
+        markers: currentPoints.map(p => p.marker),
+        route: routeLine,
+        distanceKm: sumDistance(currentPoints.map(p => ({ lat: p.lat, lng: p.lng }))),
+        calories: estimateCalories(sumDistance(currentPoints.map(p => ({ lat: p.lat, lng: p.lng }))), modeSel.value),
+        date: new Date(),
+        mode: modeSel.value
+      });
+      alert(`Saved trip "${name}" with ${currentPoints.length} points`);
+      currentPoints = [];
+      routeLine = null;
+      updateStats();
+    });
 
-document.getElementById("saveBtn").addEventListener("click", () => {
-  if (currentPoints.length < 2) { alert("Add at least 2 points!"); return; }
-  const name = tripName.value || "Unnamed Trip";
-  journeys.push({
-    id: Date.now(),
-    name,
-    points: currentPoints.map(p=>({lat:p.lat, lng:p.lng})),
-    markers: currentPoints.map(p=>p.marker),
-    route: routeLine,
-    distanceKm: sumDistance(currentPoints.map(p=>({lat:p.lat,lng:p.lng}))),
-    calories: estimateCalories(sumDistance(currentPoints.map(p=>({lat:p.lat,lng:p.lng}))), modeSel.value),
-    date: new Date(),
-    mode: modeSel.value
-  });
-  alert(`Saved trip "${name}" with ${currentPoints.length} points`);
-  currentPoints = [];
-  routeLine = null;
-  updateStats();
-});
+    // Mode change updates stats
+    modeSel.addEventListener('change', updateStats);
 
-// Mode change updates stats
-modeSel.addEventListener('change', updateStats);
-
-// Keyboard shortcuts
-window.addEventListener('keydown', e => {
-  if (e.key.toLowerCase()==='s') document.getElementById('saveBtn').click();
-  if (e.key.toLowerCase()==='z') document.getElementById('undoBtn').click();
-});
+    // Keyboard shortcuts
+    window.addEventListener('keydown', e => {
+      if (e.key.toLowerCase() === 's') document.getElementById('saveBtn').click();
+      if (e.key.toLowerCase() === 'z') document.getElementById('undoBtn').click();
+    });
 
   </script>
 </body>
