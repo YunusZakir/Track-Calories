@@ -458,26 +458,31 @@
 
     // Live GPS tracking
     if (navigator.geolocation) {
-      let userMarker, accuracyCircle;
-      navigator.geolocation.watchPosition(pos => {
+    let userMarker, accuracyCircle;
+    navigator.geolocation.watchPosition(pos => {
         const latlng = [pos.coords.latitude, pos.coords.longitude];
 
         // First time: add current location as starting point
         if (!userMarker) {
-          userMarker = L.marker(latlng).addTo(map).bindPopup("Starting Point");
-          accuracyCircle = L.circle(latlng, { radius: pos.coords.accuracy }).addTo(map);
-          userMarker.openPopup();
-          map.setView(latlng, 16);
-
-          // Add current location to journey points automatically
-          currentPoints.push({ lat: latlng[0], lng: latlng[1], marker: userMarker });
-          updateStats();
+            userMarker = L.marker(latlng).addTo(map).bindPopup("Starting Point");
+            accuracyCircle = L.circle(latlng, { radius: pos.coords.accuracy }).addTo(map);
+            userMarker.openPopup();
         } else {
-          userMarker.setLatLng(latlng);
-          accuracyCircle.setLatLng(latlng).setRadius(pos.coords.accuracy);
+            userMarker.setLatLng(latlng);
+            accuracyCircle.setLatLng(latlng).setRadius(pos.coords.accuracy);
         }
-      }, err => console.warn("Geolocation error:", err.message), { enableHighAccuracy: true });
-    }
+
+        // Add current location to journey points automatically
+        if (currentPoints.length === 0) { // Only add the initial point once
+            currentPoints.push({ lat: latlng[0], lng: latlng[1], marker: userMarker });
+        }
+        updateStats();
+
+        // Always recenter the map on the user's location
+        map.setView(latlng, 16);
+         console.log("Accuracy:", pos.coords.accuracy, "meters"); 
+    }, err => console.warn("Geolocation error:", err.message), { enableHighAccuracy: true });
+}
     // --- STATE ---
     let adding = false;
     let currentPoints = [];
@@ -520,21 +525,38 @@
       const hours = estimateDurationHours(distanceKm, mode);
       return Math.round((METS[mode] || 3.5) * USER_WEIGHT_KG * hours);
     }
-    function hhmmFromHours(h) {
-      const totalMin = Math.round(h * 60);
-      const mm = totalMin % 60;
-      const hh = Math.floor(totalMin / 60);
-      return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
-    }
-    function updateStats() {
-      const mode = modeSel.value;
-      modeVal.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
-      const km = sumDistance(currentPoints.map(p => ({ lat: p.lat, lng: p.lng })));
-      distVal.textContent = `${km.toFixed(2)} km`;
-      const hrs = estimateDurationHours(km, mode);
-      durVal.textContent = hhmmFromHours(hrs);
-      calVal.textContent = `${estimateCalories(km, mode).toLocaleString()} kcal`;
-    }
+function hmsFromHours(h) {
+  const totalSec = Math.round(h * 3600);
+  const hh = Math.floor(totalSec / 3600);
+  const mm = Math.floor((totalSec % 3600) / 60);
+  const ss = totalSec % 60;
+  return `${String(hh).padStart(2,'0')}h ${String(mm).padStart(2,'0')}m ${String(ss).padStart(2,'0')}s`;
+}
+
+function updateStats() {
+  const mode = modeSel.value;
+  modeVal.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
+
+  const km = sumDistance(currentPoints.map(p => ({ lat: p.lat, lng: p.lng })));
+  distVal.textContent = `${km.toFixed(2)} km`;
+
+  const hrs = estimateDurationHours(km, mode);
+  durVal.textContent = hmsFromHours(hrs); // <- updated here
+
+  const calLabel = document.querySelectorAll('.stats .kpi .label')[3]; // Correct label
+
+  if (mode === 'car' || mode === 'bike') {
+    const efficiency = mode === 'car' ? 15 : 60; // km per liter
+    const fuelUsed = km / efficiency;
+    calVal.textContent = `${fuelUsed.toFixed(2)} L`;
+    calLabel.textContent = "Fuel Used";
+  } else {
+    calVal.textContent = `${estimateCalories(km, mode).toLocaleString()} kcal`;
+    calLabel.textContent = "Calories";
+  }
+}
+
+
 
     // --- ROUTE ---
     async function drawRoute(coords) {
